@@ -195,6 +195,12 @@ func TestRegisterValidateWebhookConcurrentWriter(t *testing.T) {
 			reactionError: apierrors.NewAlreadyExists(resource, name),
 		},
 		{
+			name:          "the api server rejected reading the configuration",
+			verb:          "get",
+			reactionError: apierrors.NewInternalError(errors.New("read failed")),
+			expectedError: true,
+		},
+		{
 			name:          "the api server rejected the registration",
 			verb:          "update",
 			reactionError: apierrors.NewInternalError(errors.New("registration failed")),
@@ -261,6 +267,12 @@ func TestRegisterMutatingWebhookConcurrentWriter(t *testing.T) {
 			name:          "another writer created the configuration first",
 			verb:          "create",
 			reactionError: apierrors.NewAlreadyExists(resource, name),
+		},
+		{
+			name:          "the api server rejected reading the configuration",
+			verb:          "get",
+			reactionError: apierrors.NewInternalError(errors.New("read failed")),
+			expectedError: true,
 		},
 		{
 			name:          "the api server rejected the registration",

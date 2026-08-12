@@ -58,11 +58,11 @@ func writeKeyPair(t *testing.T, certFile, keyFile, commonName string) {
 		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0600))
 }
 
-// servedCommonName returns the common name of the certificate the reloader serves.
-func servedCommonName(t *testing.T, reloader *certReloader) string {
+// servedCommonName returns the common name of the certificate getCertificate returns.
+func servedCommonName(t *testing.T, getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) string {
 	t.Helper()
 
-	cert, err := reloader.GetCertificate(&tls.ClientHelloInfo{})
+	cert, err := getCertificate(&tls.ClientHelloInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, cert)
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
@@ -83,7 +83,7 @@ func TestNewCertReloader(t *testing.T) {
 	writeKeyPair(t, certFile, keyFile, "first")
 	reloader, err := newCertReloader(certFile, keyFile)
 	assert.NoError(err)
-	assert.Equal("first", servedCommonName(t, reloader))
+	assert.Equal("first", servedCommonName(t, reloader.GetCertificate))
 }
 
 func TestCertReloaderGetCertificate(t *testing.T) {
@@ -97,7 +97,7 @@ func TestCertReloaderGetCertificate(t *testing.T) {
 
 	t.Run("rotated key pair is served", func(t *testing.T) {
 		writeKeyPair(t, certFile, keyFile, "second")
-		assert.Equal(t, "second", servedCommonName(t, reloader))
+		assert.Equal(t, "second", servedCommonName(t, reloader.GetCertificate))
 	})
 
 	t.Run("half rotated key pair keeps the previous one", func(t *testing.T) {
@@ -107,11 +107,16 @@ func TestCertReloaderGetCertificate(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(certFile, next, 0600))
 
-		assert.Equal(t, "second", servedCommonName(t, reloader))
+		assert.Equal(t, "second", servedCommonName(t, reloader.GetCertificate))
 	})
 
-	t.Run("unreadable key pair keeps the previous one", func(t *testing.T) {
+	t.Run("unreadable key keeps the previous key pair", func(t *testing.T) {
+		require.NoError(t, os.Remove(keyFile))
+		assert.Equal(t, "second", servedCommonName(t, reloader.GetCertificate))
+	})
+
+	t.Run("unreadable certificate keeps the previous key pair", func(t *testing.T) {
 		require.NoError(t, os.Remove(certFile))
-		assert.Equal(t, "second", servedCommonName(t, reloader))
+		assert.Equal(t, "second", servedCommonName(t, reloader.GetCertificate))
 	})
 }
