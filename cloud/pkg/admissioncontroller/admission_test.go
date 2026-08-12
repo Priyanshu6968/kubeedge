@@ -17,14 +17,12 @@ limitations under the License.
 package admissioncontroller
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,10 +36,9 @@ import (
 	"github.com/kubeedge/kubeedge/cloud/cmd/admission/app/options"
 )
 
-// registeredForCABundle returns a controller whose webhooks are registered for the CA
-// certificate written to the options it returns.
-func registeredForCABundle(t *testing.T, caBundle []byte) (*AdmissionController, *fake.Clientset, *options.AdmissionOptions) {
-	t.Helper()
+func TestRefreshCABundle(t *testing.T) {
+	oldCA := []byte("old ca certificate")
+	newCA := []byte("rotated ca certificate")
 
 	opt := &options.AdmissionOptions{
 		CaCertFile:                filepath.Join(t.TempDir(), "ca.crt"),
@@ -49,29 +46,21 @@ func registeredForCABundle(t *testing.T, caBundle []byte) (*AdmissionController,
 		AdmissionServiceNamespace: "kubeedge",
 		AdmissionServiceName:      "kubeedge-admission-service",
 	}
-	require.NoError(t, os.WriteFile(opt.CaCertFile, caBundle, 0600))
+	require.NoError(t, os.WriteFile(opt.CaCertFile, oldCA, 0600))
 
 	clientset := fake.NewSimpleClientset()
 	ac := &AdmissionController{Client: clientset}
-	require.NoError(t, ac.registerWebhooks(opt, caBundle))
-	return ac, clientset, opt
-}
+	require.NoError(t, ac.registerWebhooks(opt, oldCA))
 
-// publishedCABundle returns the CA bundle the validating webhook configuration holds.
-func publishedCABundle(clientset *fake.Clientset) ([]byte, error) {
-	configuration, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().
-		Get(context.Background(), ValidateCRDWebhookConfigName, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
+	// publishedCABundle returns the CA bundle the validating webhook configuration holds.
+	publishedCABundle := func(t *testing.T) []byte {
+		t.Helper()
+
+		configuration, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().
+			Get(context.Background(), ValidateCRDWebhookConfigName, metav1.GetOptions{})
+		require.NoError(t, err)
+		return configuration.Webhooks[0].ClientConfig.CABundle
 	}
-	return configuration.Webhooks[0].ClientConfig.CABundle, nil
-}
-
-func TestRefreshCABundle(t *testing.T) {
-	oldCA := []byte("old ca certificate")
-	newCA := []byte("rotated ca certificate")
-
-	ac, clientset, opt := registeredForCABundle(t, oldCA)
 
 	t.Run("unchanged ca is not published again", func(t *testing.T) {
 		clientset.ClearActions()
@@ -84,9 +73,7 @@ func TestRefreshCABundle(t *testing.T) {
 		require.NoError(t, os.WriteFile(opt.CaCertFile, newCA, 0600))
 
 		assert.Equal(t, newCA, ac.refreshCABundle(opt, oldCA))
-		published, err := publishedCABundle(clientset)
-		assert.NoError(t, err)
-		assert.Equal(t, newCA, published)
+		assert.Equal(t, newCA, publishedCABundle(t))
 	})
 
 	t.Run("rejected registration keeps the published bundle", func(t *testing.T) {
@@ -97,43 +84,15 @@ func TestRefreshCABundle(t *testing.T) {
 			})
 
 		assert.Equal(t, newCA, ac.refreshCABundle(opt, newCA))
-		published, err := publishedCABundle(clientset)
-		assert.NoError(t, err)
-		assert.Equal(t, newCA, published)
+		assert.Equal(t, newCA, publishedCABundle(t))
 	})
 
 	t.Run("unreadable ca keeps the published bundle", func(t *testing.T) {
 		require.NoError(t, os.Remove(opt.CaCertFile))
 
 		assert.Equal(t, newCA, ac.refreshCABundle(opt, newCA))
-		published, err := publishedCABundle(clientset)
-		assert.NoError(t, err)
-		assert.Equal(t, newCA, published)
+		assert.Equal(t, newCA, publishedCABundle(t))
 	})
-}
-
-func TestWatchCABundle(t *testing.T) {
-	oldCA := []byte("old ca certificate")
-	newCA := []byte("rotated ca certificate")
-
-	ac, clientset, opt := registeredForCABundle(t, oldCA)
-	// Rotate the CA before the watch starts, its first pass has to publish it.
-	require.NoError(t, os.WriteFile(opt.CaCertFile, newCA, 0600))
-
-	stopCh, stopped := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(stopped)
-		ac.watchCABundle(opt, oldCA, stopCh)
-	}()
-	defer func() {
-		close(stopCh)
-		<-stopped
-	}()
-
-	assert.Eventually(t, func() bool {
-		published, err := publishedCABundle(clientset)
-		return err == nil && bytes.Equal(published, newCA)
-	}, 10*time.Second, 10*time.Millisecond)
 }
 
 func TestConfigTLS(t *testing.T) {

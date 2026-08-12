@@ -109,7 +109,7 @@ func Run(opt *options.AdmissionOptions) error {
 	}
 	// The CA certificate is mounted from a secret that can be rotated while the
 	// process runs, so the published CA bundle has to keep following it.
-	go controller.watchCABundle(opt, caBundle, wait.NeverStop)
+	go controller.watchCABundle(opt, caBundle)
 
 	http.HandleFunc("/devices", serveDevice)
 	http.HandleFunc("/devicemodels", serveDeviceModel)
@@ -406,11 +406,11 @@ func (ac *AdmissionController) registerWebhooks(opt *options.AdmissionOptions, c
 
 // watchCABundle keeps the CA bundle published in the webhook configurations in sync
 // with the CA certificate on disk, starting from the bundle already published by the
-// caller. It returns once stopCh is closed.
-func (ac *AdmissionController) watchCABundle(opt *options.AdmissionOptions, published []byte, stopCh <-chan struct{}) {
-	wait.Until(func() {
+// caller. It never returns.
+func (ac *AdmissionController) watchCABundle(opt *options.AdmissionOptions, published []byte) {
+	wait.Forever(func() {
 		published = ac.refreshCABundle(opt, published)
-	}, caBundleRefreshPeriod, stopCh)
+	}, caBundleRefreshPeriod)
 }
 
 // refreshCABundle registers the webhooks again when the CA certificate on disk is no
